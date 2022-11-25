@@ -9,6 +9,7 @@
 #include "ethUtils.h"
 #include "common_ui.h"
 #include "ui_callbacks.h"
+#include "trusted_name.h"
 
 #define ERR_SILENT_MODE_CHECK_FAILED 0x6001
 
@@ -310,13 +311,12 @@ void finalizeParsing(bool direct) {
     const char *ticker = get_network_ticker();
     ethPluginFinalize_t pluginFinalize;
     bool genericUI = true;
+    uint64_t chain_id = get_chain_id();
 
     // Verify the chain
     if (chainConfig->chainId != ETHEREUM_MAINNET_CHAINID) {
-        uint64_t id = get_chain_id();
-
-        if (chainConfig->chainId != id) {
-            PRINTF("Invalid chainID %u expected %u\n", id, chainConfig->chainId);
+        if (chainConfig->chainId != chain_id) {
+            PRINTF("Invalid chainID %u expected %u\n", chain_id, chainConfig->chainId);
             reset_app_context();
             reportFinalizeError(direct);
             if (!direct) {
@@ -428,15 +428,35 @@ void finalizeParsing(bool direct) {
     // Prepare destination address to display
     if (genericUI) {
         if (tmpContent.txContent.destinationLength != 0) {
-            getEthDisplayableAddress(tmpContent.txContent.destination,
-                                     displayBuffer,
-                                     sizeof(displayBuffer),
-                                     &global_sha3,
-                                     chainConfig->chainId);
-            compareOrCopy(strings.common.fullAddress,
-                          sizeof(strings.common.fullAddress),
-                          displayBuffer,
-                          called_from_swap);
+#ifdef HAVE_ENS
+            const char *name;
+            uint8_t name_length;
+
+            name = get_trusted_name(&name_length, &chain_id, tmpContent.txContent.destination);
+            if (name != NULL) {
+                uint8_t cpy_length;
+
+                if (name_length < sizeof(strings.common.fullAddress)) {
+                    cpy_length = name_length;
+                } else {
+                    cpy_length = sizeof(strings.common.fullAddress) - 1;
+                }
+                memcpy(strings.common.fullAddress, name, cpy_length);
+                strings.common.fullAddress[cpy_length] = '\0';
+            } else {
+#endif  // HAVE_ENS
+                getEthDisplayableAddress(tmpContent.txContent.destination,
+                                         displayBuffer,
+                                         sizeof(displayBuffer),
+                                         &global_sha3,
+                                         chainConfig->chainId);
+                compareOrCopy(strings.common.fullAddress,
+                              sizeof(strings.common.fullAddress),
+                              displayBuffer,
+                              called_from_swap);
+#ifdef HAVE_ENS
+            }
+#endif  // HAVE_ENS
         } else {
             strcpy(strings.common.fullAddress, "Contract");
         }
