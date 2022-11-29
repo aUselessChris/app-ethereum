@@ -2,13 +2,17 @@ from enum import IntEnum, auto
 from typing import Optional
 from ragger.backend import BackendInterface
 from ragger.utils import RAPDU
+from ragger.navigator import NavInsID, NavIns, NanoNavigator
 from app.command_builder import EthereumCmdBuilder
 from app.setting import SettingType, SettingImpl
 from app.eip712 import EIP712FieldType
 from app.response_parser import EthereumRespParser
 import signal
 import time
+from pathlib import Path
 
+
+ROOT_SCREENSHOT_PATH = Path(__file__).parent.parent
 
 class   EthereumClient:
     _settings: dict[SettingType, SettingImpl] = {
@@ -28,10 +32,12 @@ class   EthereumClient:
     _click_delay = 1/4
     _eip712_filtering = False
 
-    def __init__(self, client: BackendInterface):
+    def __init__(self, client: BackendInterface, chain_id: int, golden_run: bool):
         self._client = client
+        self._chain_id = chain_id
         self._cmd_builder = EthereumCmdBuilder()
         self._resp_parser = EthereumRespParser()
+        self._nav = NanoNavigator(client, client.firmware, golden_run)
         signal.signal(signal.SIGALRM, self._click_signal_timeout)
         for setting in self._settings.values():
             setting.value = False
@@ -154,5 +160,51 @@ class   EthereumClient:
 
     def eip712_filtering_show_field(self, name: str, sig: bytes):
         with self._send(self._cmd_builder.eip712_filtering_show_field(name, sig)):
+            pass
+        assert self._recv().status == 0x9000
+
+    def send_fund(self,
+                  bip32_path: list[Optional[int]],
+                  nonce: int,
+                  gas_price: int,
+                  gas_limit: int,
+                  to: bytes,
+                  amount: float,
+                  chain_id: int,
+                  screenshot_collection: str = None):
+        for chunk in self._cmd_builder.send_fund(bip32_path,
+                                                 nonce,
+                                                 gas_price,
+                                                 gas_limit,
+                                                 to,
+                                                 amount,
+                                                 chain_id):
+            with self._send(chunk):
+                steps = [
+                    NavIns(NavInsID.RIGHT_CLICK), # Review
+                    NavIns(NavInsID.RIGHT_CLICK), # Amount
+                    NavIns(NavInsID.RIGHT_CLICK), # Address
+                    NavIns(NavInsID.RIGHT_CLICK), # Fees
+                    NavIns(NavInsID.BOTH_CLICK)   # Accept
+                ]
+                if chain_id != self._chain_id:
+                    steps.insert(0, NavIns(NavInsID.RIGHT_CLICK)) # Network
+                if screenshot_collection:
+                    self._nav.navigate_and_compare(ROOT_SCREENSHOT_PATH,
+                                                   screenshot_collection,
+                                                   steps)
+                else:
+                    self._nav.navigate(steps)
+            assert self._recv().status == 0x9000
+
+    def get_challenge(self) -> int:
+        with self._send(self._cmd_builder.get_challenge()):
+            pass
+        resp = self._recv()
+        assert resp.status == 0x9000
+        return self._resp_parser.challenge(resp.data)
+
+    def provide_trusted_name(self, name: str, key_id: int, algo_id: int, sig: bytes):
+        with self._send(self._cmd_builder.provide_trusted_name(name, key_id, algo_id, sig)):
             pass
         assert self._recv().status == 0x9000
